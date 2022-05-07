@@ -2,7 +2,7 @@
 
 ###### Weapon Types
 
-| Weapon           | ID  |
+| WEAPON           | ID  |
 | ---------------- | --- |
 | Great Sword      | 0   |
 | Heavy Bowgun     | 1   |
