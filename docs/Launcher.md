@@ -4,6 +4,18 @@ The launcher supports Javascript 1.3 version
 
 ### Launcher Internal functions
 
+All internal functions are inside `window.external`
+
+Also trigger an error when poorly executedm you can get errors with try/catch:
+
+```js
+try {
+  window.external.getLastAuthResult();
+} catch (err) {
+  // ...
+}
+```
+
 | FUNCTION                          | DESCRIPTION                                      |
 | --------------------------------- | ------------------------------------------------ |
 | [playSound](#playSound)           | plays a song that is already inside the launcher |
