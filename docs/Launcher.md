@@ -4,7 +4,7 @@
 
 | FUNCTION  | DESCRIPTION                                      |
 | --------- | ------------------------------------------------ |
-| playSound | plays a song that is already inside the launcher |
+| [playSound](#playSound) | plays a song that is already inside the launcher |
 
 ###### Typescript Type
 
