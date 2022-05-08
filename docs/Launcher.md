@@ -4,41 +4,41 @@ The launcher supports Javascript 1.3 version
 
 ### Launcher Internal functions
 
-| FUNCTION                 | DESCRIPTION                                      |
-| ------------------------ | ------------------------------------------------ |
-| [playSound](#playSound)  | plays a song that is already inside the launcher |
-| getMhfBootMode           |                                                  |
-| getIniLastServerIndex    |                                                  |
-| setIniLastServerIndex    |                                                  |
-| getServerListXml         |                                                  |
-| getMhfMutexNumber        |                                                  |
-| minimizeWindow           |                                                  |
-| closeWindow              |                                                  |
-| openMhlConfig            |                                                  |
-| restartMhf               |                                                  |
-| openBrowser              |                                                  |
-| beginDrag                |                                                  |
-| getUserId                |                                                  |
-| getPassword              |                                                  |
-| loginCog                 |                                                  |
-| loginHangame             |                                                  |
-| loginDmm                 |                                                  |
-| getLastAuthResult        |                                                  |
-| getSignResult            |                                                  |
-| startUpdate              |                                                  |
-| getUpdatePercentageTotal |                                                  |
-| getUpdatePercentageFile  |                                                  |
-| getUpdateStatus          |                                                  |
-| getAccountRights         |                                                  |
-| getLauncherReturnCode    |                                                  |
-| exitLauncher             |                                                  |
-| isEnableSessionId        |                                                  |
-| getCharacterInfo         |                                                  |
-| deleteCharacter          |                                                  |
-| selectCharacter          |                                                  |
-| extractLog               |                                                  |
-| debugGetIniUserId        |                                                  |
-| debugGetIniPassword      |                                                  |
+| FUNCTION                          | DESCRIPTION                                      |
+| --------------------------------- | ------------------------------------------------ |
+| [playSound](#playSound)           | plays a song that is already inside the launcher |
+| getMhfBootMode                    |                                                  |
+| getIniLastServerIndex             |                                                  |
+| setIniLastServerIndex             |                                                  |
+| getServerListXml                  |                                                  |
+| getMhfMutexNumber                 |                                                  |
+| [minimizeWindow](#minimizeWindow) | minimize the window                              |
+| [closeWindow](#closeWindow)       | close the window                                 |
+| openMhlConfig                     |                                                  |
+| [restartMhf](#restartMhf)         | restart the window                               |
+| [openBrowser](#openBrowser)       | open an url in browser                           |
+| [beginDrag](#beginDrag)           | frees the user to drag the window                |
+| getUserId                         |                                                  |
+| getPassword                       |                                                  |
+| loginCog                          |                                                  |
+| loginHangame                      |                                                  |
+| loginDmm                          |                                                  |
+| getLastAuthResult                 |                                                  |
+| getSignResult                     |                                                  |
+| startUpdate                       |                                                  |
+| getUpdatePercentageTotal          |                                                  |
+| getUpdatePercentageFile           |                                                  |
+| getUpdateStatus                   |                                                  |
+| getAccountRights                  |                                                  |
+| getLauncherReturnCode             |                                                  |
+| exitLauncher                      |                                                  |
+| isEnableSessionId                 |                                                  |
+| getCharacterInfo                  |                                                  |
+| deleteCharacter                   |                                                  |
+| selectCharacter                   |                                                  |
+| extractLog                        |                                                  |
+| debugGetIniUserId                 |                                                  |
+| debugGetIniPassword               |                                                  |
 
 ###### Typescript Type
 
@@ -51,6 +51,11 @@ declare module global {
 
 interface LauncherFunctions {
   playSound(song: LauncherSongs): void;
+  beginDrag(active: boolean): void;
+  openBrowser(url: string): void;
+  restartMhf(): void;
+  minimizeWindow(): void;
+  closeWindow(): void;
 }
 
 type LauncherSongs =
@@ -78,3 +83,63 @@ window.external.playSound(launcherSongType);
 | IDR_WAV_OK        | sound for when actions are successful   |
 | IDR_WAV_PRE_LOGIN | sound for when the user click in login  |
 | IDR_NIKU          | sound for when login is successful      |
+
+##### closeWindow
+
+Close the Window
+
+###### How to use:
+
+```js
+window.external.closeWindow();
+```
+
+##### beginDrag
+
+frees the user to drag the window
+
+###### How to use:
+
+```js
+window.external.beginDrag(boolean);
+```
+
+##### openBrowser
+
+Open an url in Browser
+
+###### How to use:
+
+```js
+window.external.openBrowser(url);
+```
+
+##### restartMhf
+
+Restart the Window
+
+###### How to use:
+
+```js
+window.external.restartMhf();
+```
+
+##### minimizeWindow
+
+Minimize the Window
+
+###### How to use:
+
+```js
+window.external.minimizeWindow();
+```
+
+##### closeWindow
+
+Close the Window
+
+###### How to use:
+
+```js
+window.external.closeWindow();
+```
