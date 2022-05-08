@@ -1,3 +1,3 @@
-### MHFrontier Server Docs
+### MHFrontier Server Documentation
 
 MHFrontier Server Notes
