@@ -1,12 +1,52 @@
 # Launcher
 
-The launcher supports Javascript 1.3 version
+When the launcher opens it consults two server, [srv-mhf.capcom-networks.jp](#launcher-hosts) and [cog-members.mhf-z.jp](#launcher-hosts), [srv-mhf.capcom-networks.jp](#launcher-hosts) to get the server list that is consumable by the launcher [`window.external.getServerListXml`](#getServerListXml)
+and [cog-members.mhf-z.jp](#launcher-hosts) to get the html of launcher.
+
+**The launcher supports Javascript 1.3 Version**
+
+### Launcher Hosts
+
+| NAME                                      | URI                        |
+| ----------------------------------------- | -------------------------- |
+| [Server information](#server-information) | srv-mhf.capcom-networks.jp |
+| [Launcher](#launcher)                     | cog-members.mhf-z.jp       |
+
+#### Server information
+
+##### Routes
+
+| METHOD | ROUTE                  | DESCRIPTION                                |
+| ------ | ---------------------- | ------------------------------------------ |
+| UNK    | /server/unique.php     | Check if the character name already exists |
+| GET    | /server/serverlist.php | Returns server list                        |
+
+###### /server/serverlist.php
+
+Returns server list
+
+Return Example:
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<server_groups>
+   <group idx="0" nam="SERVER_NAME" ip="SERVER_IP" port="SERVER_PORT" />
+</server_groups>
+```
+
+#### Launcher
+
+##### Routes
+
+| METHOD | ROUTE                | DESCRIPTION              |
+| ------ | -------------------- | ------------------------ |
+| GET    | /launcher/?ver=2.016 | Get Launcher HTML Source |
 
 ### Launcher Internal functions
 
 All internal functions are inside `window.external`
 
-Also trigger an error when poorly executedm you can get errors with try/catch:
+Also trigger an error when poorly executed, you can get errors with try/catch:
 
 ```js
 try {
