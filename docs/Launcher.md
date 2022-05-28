@@ -5,6 +5,8 @@ and [cog-members.mhf-z.jp](#launcher-hosts) to get the html of launcher.
 
 **The launcher supports Javascript 1.3 Version**
 
+width: 1124px; height: 600px
+
 ### Launcher Hosts
 
 | NAME                                      | URI                        |
@@ -72,7 +74,7 @@ try {
 | [beginDrag](#beginDrag)           | frees the user to drag the window                |
 | getUserId                         |                                                  |
 | getPassword                       |                                                  |
-| loginCog                          |                                                  |
+| loginCog                       |                                                  |
 | loginHangame                      |                                                  |
 | loginDmm                          |                                                  |
 | getLastAuthResult                 |                                                  |
@@ -95,26 +97,51 @@ try {
 ###### Typescript Type
 
 ```ts
-declare module global {
-  interface Window {
-    external: LauncherFunctions;
+declare global {
+  interface External {
+    playSound(song: LauncherSongs): void;
+    beginDrag(active: boolean): void;
+    openBrowser(url: string): void;
+    restartMhf(): void;
+    minimizeWindow(): void;
+    openMhlConfig(): void;
+    closeWindow(): void;
+    getUpdatePercentageTotal(): unknown;
+    getAccountRights(): string;
+    getMhfBootMode(): BoostModeTypes;
+    getIniLastServerIndex(): unknown;
+    getServerListXml(): string;
+    getMhfMutexNumber(): number;
+    getUserId(): string;
+    getPassword(): string;
+    getLastAuthResult(): LastAuthResult;
+    getSignResult(): SignResult;
+    isEnableSessionId(): unknown;
+    getCharacterInfo(): string;
+    extractLog(): unknown;
+    getUpdateStatus(): number;
+    getLauncherReturnCode(): 'NORMAL';
+    selectCharacter(charUid: string, charUid1: string): void;
+    exitLauncher(): void;
+    loginCog(username: string, password: string, confirmPassword: string): void;
   }
 }
 
-interface LauncherFunctions {
-  playSound(song: LauncherSongs): void;
-  beginDrag(active: boolean): void;
-  openBrowser(url: string): void;
-  restartMhf(): void;
-  minimizeWindow(): void;
-  closeWindow(): void;
+export type LauncherSongs = 'IDR_WAV_SEL' | 'IDR_WAV_OK' | 'IDR_WAV_PRE_LOGIN' | 'IDR_NIKU';
+export type BoostModeTypes = '_MHF_NORMAL';
+
+export enum LastAuthResult {
+  None = 'AUTH_NULL',
+  AuthSuccess = 'AUTH_SUCCESS',
+  InLoading = 'AUTH_PROGRESS',
+  AuthErrorAcc = 'AUTH_ERROR_ACC',
 }
 
-type LauncherSongs =
-  | "IDR_WAV_SEL"
-  | "IDR_WAV_OK"
-  | "IDR_WAV_PRE_LOGIN"
-  | "IDR_NIKU";
+export enum SignResult {
+  None = 'SIGN_UNKNOWN',
+  SignSuccess = 'SIGN_SUCCESS',
+  NotMatchPassword = 'SIGN_EPASS',
+}
 ```
 
 ##### playSound
