@@ -16,6 +16,14 @@ width: 1124px; height: 600px
 
 #### Server information
 
+```js
+// Headers
+{
+  host: 'srv-mhf.capcom-networks.jp',
+  'user-agent': 'MHF svrsel_trm_pc/1.0'
+}
+```
+
 ##### Routes
 
 | METHOD | ROUTE                  | DESCRIPTION                                |
@@ -37,6 +45,19 @@ Return Example:
 ```
 
 #### Launcher
+
+
+```js
+// Headers
+{
+  accept: 'image/gif, image/jpeg, image/pjpeg, application/x-ms-application, application/xaml+xml, application/x-ms-xbap, */*',
+  'accept-language': 'pt-BR,pt;q=0.8,en-US;q=0.5,en;q=0.2',
+  'user-agent': 'Mozilla/5.0 (Windows NT 6.2; WOW64; Trident/7.0; rv:11.0) like Gecko',
+  'accept-encoding': 'gzip, deflate',
+  host: 'cog-members.mhf-z.jp'
+}
+```
+
 
 ##### Routes
 
