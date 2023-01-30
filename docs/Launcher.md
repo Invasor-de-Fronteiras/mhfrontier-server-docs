@@ -100,7 +100,7 @@ try {
 | loginDmm                          |                                                  |
 | getLastAuthResult                 |                                                  |
 | getSignResult                     |                                                  |
-| startUpdate                       |                                                  |
+| startUpdate                       | start update files                                                 |
 | getUpdatePercentageTotal          |                                                  |
 | getUpdatePercentageFile           |                                                  |
 | getUpdateStatus                   |                                                  |
