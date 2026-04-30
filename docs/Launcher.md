@@ -10,6 +10,17 @@ On startup the launcher contacts two servers:
 - **Server-information host** (`srv-mhf.capcom-networks.jp`) — fetches the server list.
 - **Launcher host** (`cog-members.mhf-z.jp`) — fetches the launcher HTML/JS.
 
+These hostnames are hardcoded in `mhl.dll`. To intercept them, the client machine must redirect those exact domains to your server. Open `C:\Windows\System32\drivers\etc\hosts` as administrator and add:
+
+```
+127.0.0.1 srv-mhf.capcom-networks.jp
+127.0.0.1 cog-members.mhf-g.jp cog-members.mhf-z.jp
+127.0.0.1 erupe.custom
+127.0.0.1 launcher.arcamh.com
+```
+
+The domains must match exactly what is declared in your `mhl.dll` — different builds may use different hostnames.
+
 ---
 
 ## Launcher Hosts
@@ -31,10 +42,11 @@ Headers:
 
 | Method | Route | Description |
 | ------ | ----- | ----------- |
-| GET | `/server/serverlist.php` | Returns the server group list |
+| GET | `/server/serverlist.xml` | Returns the server group list (TW client) |
+| GET | `/serverlist.xml` | Returns the server group list (JP client) |
 | POST | `/server/unique.php` | Checks if a character name is available |
 
-##### GET /server/serverlist.php
+##### GET /server/serverlist.xml
 
 Returns an XML list of server groups. Each `<group>` entry is one selectable server.
 
@@ -64,6 +76,40 @@ Headers:
 | Method | Route | Description |
 | ------ | ----- | ----------- |
 | GET | `/launcher/?ver=2.016` | Returns the launcher HTML |
+| GET | `/version` | Returns the current patch version as a plain string |
+| POST | `/auth/launcher/login` | COG short-lived auth endpoint (see [JP Auth Endpoint](#jp-auth-endpoint)) |
+
+##### GET /version
+
+Returns the current client version as a plain string (e.g. `2.016`). The launcher calls this before showing the update screen. If the endpoint returns 404 or is unreachable, the update step is skipped.
+
+##### POST /auth/launcher/login
+
+Called by a hidden iframe inside the launcher as part of the COG authentication flow (see [PC (COG)](#pc-cog)). The iframe posts the user's credentials and expects an HTML page that calls `parent.postMessage(result, origin)` with a JSON payload.
+
+The response must be an HTML page that executes `postMessage` on load:
+
+```html
+<!DOCTYPE html>
+<html>
+<body onload="doPost();">
+<script>
+function doPost() {
+  parent.postMessage(document.getElementById("result").getAttribute("value"), "http://cog-members.mhf-z.jp");
+}
+</script>
+<input id="result" value='{RESULT_JSON}'/>
+</body>
+</html>
+```
+
+Where `{RESULT_JSON}` is:
+
+```json
+{"result": "Ok", "skey": "<password>", "code": "000", "msg": ""}
+```
+
+The `skey` field must carry the raw password. The game executable reads this value and passes it directly to the sign server as the authentication credential. Returning `code: "000"` tells the launcher to proceed to `loginCog`. Any other code triggers an error dialog (see [COG short-lived auth service response codes](#cog-short-lived-auth-service-response-codes)).
 
 ---
 
