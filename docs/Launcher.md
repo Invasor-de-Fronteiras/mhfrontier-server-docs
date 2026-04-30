@@ -1,6 +1,9 @@
 # Launcher
 
-The MHF launcher is a fixed-size (`1124 × 600 px`) Internet Explorer 11 browser window hosted inside the game executable. It runs JavaScript 1.3 and exposes a set of native functions through `window.external`.
+The MHF launcher is a fixed-size Internet Explorer 11 browser window hosted inside the game executable. It runs JavaScript 1.3 and exposes a set of native functions through `window.external`.
+
+PC window size: **1124 × 600 px**.  
+PS Vita window size: **840 × 440 px**.
 
 On startup the launcher contacts two servers:
 
@@ -64,18 +67,62 @@ Headers:
 
 ---
 
+## Authentication Providers
+
+The launcher determines which authentication provider to use from the page's hostname:
+
+| Hostname contains | Provider | Login call |
+| ----------------- | -------- | ---------- |
+| `capcom-onlinegames.jp` | COG (Capcom Online Games) | `loginCog` |
+| `hangame-` | Hangame (NHN) | `loginHangame` |
+| anything else | DMM | `loginDmm` |
+
+The mode is detected once at page load. COG is the default for the official Japanese service. Hangame and DMM use native browser windows for their OAuth flow — the JavaScript has no access to the credentials.
+
+---
+
 ## Authentication Flow
 
+### PC (COG)
+
 1. The launcher collects username and password from the user.
-2. It calls [`loginCog(username, password, anyString)`](#loginCog) — or `loginHangame`/`loginDmm` for those providers.
-3. The game executable communicates with the sign server over the MHF binary protocol.
-4. The launcher polls [`getLastAuthResult()`](#getLastAuthResult) every ~10 ms until the result is no longer `AUTH_PROGRESS`.
-5. On success, [`getCharacterInfo()`](#getCharacterInfo) becomes available and returns the character list XML.
-6. The launcher calls [`selectCharacter(charUid, charUid)`](#selectCharacter), waits ~3 seconds, then calls [`exitLauncher()`](#exitLauncher) to start the game.
+2. A hidden iframe loads `./bnr/launcher.html?q={random}` and sends the credentials to the COG short-lived auth service via `postMessage`.
+3. The auth service responds with a result code. `000` = proceed; anything else = show error.
+4. On `000`, the launcher calls [`loginCog(username, password, password)`](#loginCog).
+5. The game executable communicates with the sign server over the MHF binary protocol.
+6. The launcher polls [`getLastAuthResult()`](#getLastAuthResult) every ~10 ms until the result is no longer `AUTH_PROGRESS`.
+7. On success, the launcher calls [`getAccountRights()`](#getAccountRights). If the account has no `trial` right, a registration dialog is shown. If HR ≥ 100 and no `basic` right (Hunter Life Course), a purchase dialog is shown.
+8. [`getCharacterInfo()`](#getCharacterInfo) becomes available and returns the character list XML.
+9. The launcher calls [`selectCharacter(charUid, charUid)`](#selectCharacter), waits ~3 seconds, then calls [`exitLauncher()`](#exitLauncher) to start the game.
+
+### PC (Hangame / DMM)
+
+Same polling loop as COG, but steps 2–4 are replaced by a call to [`loginHangame()`](#loginHangame) or [`loginDmm()`](#loginDmm). The native window handles credentials; JavaScript never sees them.
+
+### PS3 / PS Vita
+
+Console authentication uses a dedicated COG account linking page (`link.html`) with console-specific bridge functions. See [Console Launchers (PS3 / PS Vita)](#console-launchers-ps3--ps-vita).
+
+### COG short-lived auth service response codes
+
+Codes returned by the hidden iframe to the launcher before `loginCog` is called:
+
+| Code | Meaning |
+| ---- | ------- |
+| `000` | Success — proceed to `loginCog` |
+| `102` | Server busy — retry later |
+| `200` | Character encoding not supported |
+| `201`, `300`, `302`, `320` | Wrong ID / password |
+| `301` | Account temporarily suspended (1 hour) |
+| `304` | Too many wrong password attempts |
+| `321` | Security card data mismatch |
+| `202`, `220`, `221`, `227`, `777` | Permission denied / invalid access |
+| `235`, `309`, `360` | Unknown error |
+| `9000` | COG server maintenance |
 
 ### Auto-login
 
-The launcher can persist credentials in `localStorage` and automatically call `loginCog` on the next launch. The last selected character UID is also stored, allowing fully automatic login + character selection. Because `localStorage` is backed by the IE cache, clearing the IE cache removes saved credentials and the auto-login state.
+The launcher can persist credentials in browser cookies (`cogid{MUTEX}` for username, `pw{MUTEX}` for password, keyed by the process mutex number) and automatically call `loginCog` on the next launch. The last selected character UID is also stored, allowing fully automatic login + character selection. Clearing the IE cache removes saved credentials and the auto-login state.
 
 ### New character
 
@@ -89,7 +136,9 @@ The sign server creates an uninitialised character row and returns it in the nex
 
 ### Character deletion
 
-Deletion is also asynchronous. The launcher calls [`deleteCharacter(uid)`](#deleteCharacter) then polls `getLastAuthResult()` for `DEL_PROGRESS` → `DEL_SUCCESS`, after which it re-authenticates to refresh the character list.
+Deletion is asynchronous. The launcher calls [`deleteCharacter(uid)`](#deleteCharacter) then polls `getLastAuthResult()` for `DEL_PROGRESS` → `DEL_SUCCESS`, after which it re-authenticates to refresh the character list. The official client uses a three-step confirmation dialog that requires the player to type the character's UID before deletion is allowed.
+
+Attempting to delete the last character on an account triggers a 7-day cooldown before a replacement guaranteed character is provided.
 
 ### Keyboard shortcuts
 
@@ -98,7 +147,36 @@ Deletion is also asynchronous. The launcher calls [`deleteCharacter(uid)`](#dele
 | `Enter` | Submit login form / launch game |
 | `,` | Select previous character |
 | `.` | Select next character |
-| `~` | Open debug eval console |
+| `~` | Open debug eval console (debug builds only) |
+
+---
+
+## Server List XML
+
+[`getServerListXml()`](#getServerListXml) returns the full server list XML. The game uses single-quoted attributes when sending this to console clients.
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<server_groups>
+  <group idx='0' nam='Select a Server' ip='' />
+  <group idx='1' nam='Localhost' cog='pre' ip='127.0.0.1' port='53312' svid='1000' />
+  <group idx='2' nam='Production' cog='c'   ip='203.0.113.4' port='53312' svid='2000' />
+</server_groups>
+```
+
+### Server Group Attributes
+
+| Attribute | Type | Description |
+| --------- | ---- | ----------- |
+| `idx` | int | Zero-based selection index. Index 0 is typically a placeholder entry. |
+| `nam` | string | Display name shown in the server dropdown. |
+| `ip` | string | Server IP or hostname. **Empty string `""`** marks the server as blocked — it cannot be selected. |
+| `port` | int | Sign server port (default `53312`). |
+| `cog` | string | COG environment. `pre` = pre-release/staging, `c` = production. |
+| `svid` | string | Server ID used for backend routing. Defaults to `"1000"` if absent. Server ID `"1018"` triggers a COOP restriction alert. |
+| `oauth_url` | string | Console-only. URL for the COG account linking page (`link.html`). |
+
+The launcher stores the last selected index via [`setIniLastServerIndex()`](#getIniLastServerIndex--setIniLastServerIndex).
 
 ---
 
@@ -132,12 +210,12 @@ The document uses **single-quoted attributes** and **Shift-JIS encoding**. Befor
 | `uid` | string (hex) | Unique character ID, passed to [`selectCharacter`](#selectCharacter) and [`deleteCharacter`](#deleteCharacter). |
 | `name` | string | Character name in Shift-JIS. For uninitialised characters see [below](#uninitialised-characters). |
 | `weapon` | string | Weapon name in Japanese. See [Weapons](#weapons). |
-| `HR` | int (0–999) | Raw HRP value. See [HR System](#hr-system). Capped at 999 for display. |
-| `GR` | int (0–999) | G-rank value. `0` means the character has not entered G-rank. Capped at 999 for display. |
+| `HR` | int (0–999) | Raw HRP value. See [HR System](#hr-system). |
+| `GR` | int (0–999) | G-rank value. `0` means the character has not entered G-rank. |
 | `lastLogin` | int | Unix timestamp (seconds) of the last time this character was used. |
 | `sex` | `M`\|`F` | Character gender. |
 
-Characters are delivered in the order the sign server returns them. The sign server queries by `last_login DESC`, so the most recently played character is first.
+Characters are delivered in the order the sign server returns them. The sign server queries by `last_login DESC`, so the most recently played character is **first**.
 
 ### Uninitialised Characters
 
@@ -165,6 +243,8 @@ HRP = 999 is the sentinel value that marks a character as having transitioned to
 
 **Entrance hall routing:** After sign-in the game executable routes the player to an entrance hall based on HRP. Players with low HRP land in a beginner hall and cannot see senior-tier channels. If a server wants all players to share a single hall regardless of rank, it sends HRP = 999 for every character. This does not affect the `GR` value.
 
+**Display format:** `HR{hrp}` for normal characters. If GR > 0, the launcher appends `　GR{gr}` (full-width space separator). Example: `HR42　GR7`.
+
 ### Weapons
 
 The `weapon` attribute is a Japanese string. Known values:
@@ -187,6 +267,90 @@ The `weapon` attribute is a Japanese string. Known values:
 | 弓 | Bow | `bow` |
 
 Any unrecognised value (including `?????`) means the weapon is unknown or unset. Icon: `uk`.
+
+---
+
+## Account Rights
+
+[`getAccountRights()`](#getAccountRights) returns XML listing the rights attached to the account:
+
+```xml
+<rights>
+  <right name="trial" />
+  <right name="basic" />
+</rights>
+```
+
+| Right name | Meaning |
+| ---------- | ------- |
+| `trial` | Account can access the game servers |
+| `basic` | Account has the Hunter Life Course subscription (required to play characters with HRP ≥ 100) |
+
+If neither right is present the account must register. If `trial` is present but not `basic`, the player can play but will be prompted to purchase the subscription when attempting to launch with a high-HRP character.
+
+---
+
+## Console Launchers (PS3 / PS Vita)
+
+PS3 and PS Vita use a stripped-down launcher (`link.html`) dedicated to linking a COG account. The main character-select UI is embedded in the game executable itself on consoles. Protocol-level, PS3 and Vita are identical.
+
+### Console bridge functions
+
+In addition to the standard `window.external` API, consoles expose:
+
+| Function | Description |
+| -------- | ----------- |
+| `mhfBrowserGetCOGId()` | Returns the cached COG username |
+| `mhfBrowserSetCOGId(id)` | Stores a COG username to the console's local storage |
+| `mhfBrowserGetCOGPass()` | Returns the cached COG password |
+| `mhfBrowserSetCOGPass(pw)` | Stores a COG password to the console's local storage |
+| `endCogAuth(payload)` | Finalises authentication. `payload` = `username + "\n" + password` |
+
+The `link.html` page reads cached credentials on load (pre-filling the form), then calls these on submit:
+
+```js
+window.external.mhfBrowserSetCOGId(user.value);
+window.external.mhfBrowserSetCOGPass(pass.value);
+window.external.endCogAuth(user.value + "\n" + pass.value);
+```
+
+### PS3 sign protocol
+
+PS3 clients send a different packet type than PC:
+
+| | PC | PS3 |
+| - | -- | --- |
+| Packet type | `DSGN:100` | `PS3SGN:100` |
+| Auth credential | username + bcrypt password | PSN ID (looked up in `users.psn_id`) |
+| Password check | bcrypt | skipped entirely |
+| Patch server URLs | conditional | always provided (flag = 2) |
+| Patch/entrance hostname | IP or custom domain | `ps3-{language}.zerulight.cc` |
+| PSN ID in response | not included | 20-byte Shift-JIS padded string appended after filters |
+
+#### PS3 request layout
+
+```
+null_terminated_bytes  "0000000255"   // PS3 identifier
+bytes[2]               0x21 0x00      // "!" marker
+bytes[82]              padding
+null_terminated_bytes  {PSN_ID}       // PSN account ID
+```
+
+The server looks up the PSN ID in `users.psn_id` to find the corresponding account. If no match exists the login fails.
+
+### Vita sign protocol
+
+Identical to PS3 except the packet type is `VITASGN:100` and the UA string is `MHF-VITA` instead of `MHF-PS3`.
+
+### PSN ID registration
+
+Players can link their PSN ID in-game via chat command:
+
+```
+/psn <psn_id>
+```
+
+The server stores the value in `users.psn_id`. From that point the console client can authenticate using only the PSN ID — no password is checked.
 
 ---
 
@@ -216,29 +380,29 @@ try {
 | [`exitLauncher`](#exitLauncher) | `void` | Close the launcher and start the game |
 | [`selectCharacter`](#selectCharacter) | `void` | Select which character to play |
 | [`deleteCharacter`](#deleteCharacter) | `void` | Delete a character by UID (asynchronous) |
-| [`loginCog`](#loginCog) | `void` | Authenticate against the sign server (JP/TW) |
+| [`loginCog`](#loginCog) | `void` | Authenticate against the sign server (COG/JP/TW) |
 | [`loginHangame`](#loginHangame) | `void` | Authenticate via Hangame |
 | [`loginDmm`](#loginDmm) | `void` | Authenticate via DMM |
 | [`getLastAuthResult`](#getLastAuthResult) | `LastAuthResult` | Result of the last auth or delete operation |
 | [`getSignResult`](#getSignResult) | `SignResult` | Sign-server result of the last `loginCog` call |
-| [`getUserId`](#getUserId) | `string` | Username used for the last login |
-| [`getPassword`](#getPassword) | `string` | Password used for the last login |
+| [`getUserId`](#getUserId--getPassword) | `string` | Username used for the last login |
+| [`getPassword`](#getUserId--getPassword) | `string` | Password used for the last login |
 | [`getServerListXml`](#getServerListXml) | `string` | Raw XML from the server-info host |
 | [`getCharacterInfo`](#getCharacterInfo) | `string` | XML with character data (available after auth success) |
-| [`getAccountRights`](#getAccountRights) | `string` | Account rights/permissions bitmask |
-| [`getMhfBootMode`](#getMhfBootMode) | `BoostModeTypes` | Current boot mode |
+| [`getAccountRights`](#getAccountRights) | `string` | Account rights XML |
+| [`getMhfBootMode`](#getMhfBootMode) | `BootModeType` | Current boot mode |
 | [`getMhfMutexNumber`](#getMhfMutexNumber) | `number` | Process mutex number |
-| [`getIniLastServerIndex`](#getIniLastServerIndex) | `number` | Index of the server last selected by the user |
-| [`setIniLastServerIndex`](#setIniLastServerIndex) | `void` | Persist the user's server selection |
-| [`getLauncherReturnCode`](#getLauncherReturnCode) | `'NORMAL'` | Return code from the launcher process |
-| [`isEnableSessionId`](#isEnableSessionId) | `unknown` | Whether session ID auth is enabled |
+| [`getIniLastServerIndex`](#getIniLastServerIndex--setIniLastServerIndex) | `number` | Index of the server last selected by the user |
+| [`setIniLastServerIndex`](#getIniLastServerIndex--setIniLastServerIndex) | `void` | Persist the user's server selection |
+| [`getLauncherReturnCode`](#getLauncherReturnCode) | `string` | Return code from the launcher process |
+| [`isEnableSessionId`](#isEnableSessionId) | `boolean` | Whether the session is valid (maintenance check) |
 | [`startUpdate`](#startUpdate) | `boolean` | Start the file update process |
 | [`getUpdateStatus`](#getUpdateStatus) | `UpdateStatus` | Current update state |
-| [`getUpdatePercentageTotal`](#getUpdatePercentageTotal) | `number` | Overall update progress (0–100) |
-| [`getUpdatePercentageFile`](#getUpdatePercentageFile) | `number` | Per-file update progress (0–100) |
-| [`extractLog`](#extractLog) | `unknown` | Extract the game log |
-| `debugGetIniUserId` | `string` | Debug: read userId from INI |
-| `debugGetIniPassword` | `string` | Debug: read password from INI |
+| [`getUpdatePercentageTotal`](#getUpdatePercentageTotal--getUpdatePercentageFile) | `number` | Overall update progress (0–100) |
+| [`getUpdatePercentageFile`](#getUpdatePercentageTotal--getUpdatePercentageFile) | `number` | Per-file update progress (0–100) |
+| [`extractLog`](#extractLog) | `string` | Extract the game log |
+| `debugGetIniUserId` | `string` | Debug: read userId from INI (branch builds only) |
+| `debugGetIniPassword` | `string` | Debug: read password from INI (branch builds only) |
 
 ---
 
@@ -247,7 +411,7 @@ try {
 ```ts
 declare global {
   interface External {
-    playSound(song: LauncherSongs): void;
+    playSound(song: LauncherSounds): void;
     beginDrag(active: boolean): void;
     openBrowser(url: string): void;
     restartMhf(): void;
@@ -255,7 +419,7 @@ declare global {
     openMhlConfig(): void;
     closeWindow(): void;
     getAccountRights(): string;
-    getMhfBootMode(): BoostModeTypes;
+    getMhfBootMode(): BootModeType;
     getIniLastServerIndex(): number;
     setIniLastServerIndex(idx: number): void;
     getServerListXml(): string;
@@ -264,44 +428,85 @@ declare global {
     getPassword(): string;
     getLastAuthResult(): LastAuthResult;
     getSignResult(): SignResult;
-    isEnableSessionId(): unknown;
+    isEnableSessionId(): boolean;
     getCharacterInfo(): string;
-    extractLog(): unknown;
-    getLauncherReturnCode(): 'NORMAL';
+    extractLog(): string;
+    getLauncherReturnCode(): 'NULL' | 'NORMAL' | 'SELFUP' | 'ERR';
     selectCharacter(charUid: string, charUid1: string): void;
     exitLauncher(): void;
     loginCog(username: string, password: string, confirmPassword: string): void;
+    loginHangame(): void;
+    loginDmm(): void;
+    deleteCharacter(charUid: string): void;
     startUpdate(): boolean;
     getUpdatePercentageTotal(): number;
     getUpdatePercentageFile(): number;
     getUpdateStatus(): UpdateStatus;
-    deleteCharacter(charUid: string): void;
   }
 }
 
-export type LauncherSongs = 'IDR_WAV_SEL' | 'IDR_WAV_OK' | 'IDR_WAV_PRE_LOGIN' | 'IDR_NIKU';
-export type BoostModeTypes = '_MHF_NORMAL';
+export type LauncherSounds =
+  | 'IDR_WAV_SEL'
+  | 'IDR_WAV_OK'
+  | 'IDR_WAV_PRE_LOGIN'
+  | 'IDR_WAV_LOGIN'
+  | 'IDR_NIKU'
+  | 'IDR_SILENCE';
+
+export type BootModeType =
+  | '_MHF_NORMAL'
+  | '_MHF_SELFUP'
+  | '_MHF_DMM_SELF_UPDATE'
+  | '_MHF_AUTOLC'
+  | '_MHF_DMM_AUTO_LAUNCH';
 
 export enum LastAuthResult {
-  None = 'AUTH_NULL',
-  AuthSuccess = 'AUTH_SUCCESS',
-  InLoading = 'AUTH_PROGRESS',
-  AuthErrorAcc = 'AUTH_ERROR_ACC',
-  AuthErrorNet = 'AUTH_ERROR_NET',
-  DeleteInProgress = 'DEL_PROGRESS',
-  DeleteSuccess = 'DEL_SUCCESS',
+  None              = 'AUTH_NULL',
+  InProgress        = 'AUTH_PROGRESS',
+  AuthSuccess       = 'AUTH_SUCCESS',
+  AuthErrorAcc      = 'AUTH_ERROR_ACC',
+  AuthErrorPwd      = 'AUTH_ERROR_PWD',
+  AuthErrorNet      = 'AUTH_ERROR_NET',
+  DeleteInProgress  = 'DEL_PROGRESS',
+  DeleteSuccess     = 'DEL_SUCCESS',
+  DeleteErrorNet    = 'DEL_ERROR_NET',
+  DeleteErrorIvl    = 'DEL_ERROR_IVL',
+  DeleteErrorMnc    = 'DEL_ERROR_MNC',
 }
 
 export enum SignResult {
-  None = 'SIGN_UNKNOWN',
-  SignSuccess = 'SIGN_SUCCESS',
-  NotMatchPassword = 'SIGN_EPASS',
+  None            = 'SIGN_UNKNOWN',
+  Success         = 'SIGN_SUCCESS',
+  Failed          = 'SIGN_EFAILED',
+  Illegal         = 'SIGN_EILLEGAL',
+  Alert           = 'SIGN_EALERT',
+  AlertCoop       = 'SIGN_EALERT_COOP',
+  Abort           = 'SIGN_EABORT',
+  Response        = 'SIGN_ERESPONSE',
+  Database        = 'SIGN_EDATABASE',
+  WrongPassword   = 'SIGN_EPASS',
+  Suspended       = 'SIGN_ESUSPEND',
+  Eliminated      = 'SIGN_EELIMINATE',
+  Closed          = 'SIGN_ECLOSE',
+  ClosedEx        = 'SIGN_ECLOSE_EX',
+  NotReady        = 'SIGN_ENOTREADY',
+  AlreadyLoggedIn = 'SIGN_EALREADY',
+  IpBlocked       = 'SIGN_EIPADDR',
+  NoRights        = 'SIGN_ERIGHT',
+  AppError        = 'SIGN_EAPP',
+  Other           = 'SIGN_EOTHER',
+  // Console-specific
+  CogLink         = 'SIGN_ECOGLINK',
+  CogCode         = 'SIGN_ECOGCODE',
+  Token           = 'SIGN_ETOKEN',
+  Maintenance     = 'SIGN_EMAINTE',
 }
 
 export enum UpdateStatus {
-  None = '0',
+  None        = '0',
   UpdateStart = 'UM_UPDATE_START',
-  UpdateOk = 'UM_UPDATE_OK',
+  UpdateOk    = 'UM_UPDATE_OK',
+  UpdateNg    = 'UM_UPDATE_NG',
 }
 ```
 
@@ -309,18 +514,20 @@ export enum UpdateStatus {
 
 ### playSound
 
-Plays a built-in launcher audio clip. Some sounds can also be loaded from local audio files when the built-in is unavailable.
+Plays a built-in launcher audio clip.
 
 ```js
-window.external.playSound('IDR_NIKU');
+window.external.playSound('IDR_WAV_LOGIN');
 ```
 
-| ID | Plays when |
-| -- | ---------- |
+| ID | When it plays |
+| -- | ------------- |
 | `IDR_WAV_SEL` | Mouse hovers over an element |
-| `IDR_WAV_OK` | An action succeeds |
+| `IDR_WAV_OK` | An action succeeds / button click |
 | `IDR_WAV_PRE_LOGIN` | User clicks the login button |
-| `IDR_NIKU` | Login is successful |
+| `IDR_WAV_LOGIN` | Login succeeds |
+| `IDR_NIKU` | Update complete |
+| `IDR_SILENCE` | Mute / no sound |
 
 ---
 
@@ -430,7 +637,7 @@ checkDelete();
 
 ### loginCog
 
-Initiates authentication against the sign server. Returns immediately; poll [`getLastAuthResult()`](#getLastAuthResult) every ~10 ms to track progress. The third argument (confirm password) is not validated by the server and can be any string.
+Initiates authentication against the sign server. Returns immediately; poll [`getLastAuthResult()`](#getLastAuthResult) every ~10 ms to track progress. The third argument mirrors the password and is not validated by the server.
 
 ```js
 window.external.loginCog(username, password, password);
@@ -444,9 +651,29 @@ window.external.loginCog(username + '+', password, password);
 
 ---
 
+### loginHangame
+
+Initiates Hangame authentication. Opens a native Hangame login window; JavaScript has no access to the credentials. Poll [`getLastAuthResult()`](#getLastAuthResult) as with `loginCog`.
+
+```js
+window.external.loginHangame();
+```
+
+---
+
+### loginDmm
+
+Initiates DMM authentication. Opens a native DMM login window; JavaScript has no access to the credentials. Poll [`getLastAuthResult()`](#getLastAuthResult) as with `loginCog`.
+
+```js
+window.external.loginDmm();
+```
+
+---
+
 ### getLastAuthResult
 
-Returns the result of the last `loginCog` or [`deleteCharacter`](#deleteCharacter) call. Shared between auth and deletion flows.
+Returns the result of the last `loginCog`, `loginHangame`, `loginDmm`, or [`deleteCharacter`](#deleteCharacter) call. Shared between auth and deletion flows.
 
 ```js
 var result = window.external.getLastAuthResult();
@@ -457,16 +684,20 @@ var result = window.external.getLastAuthResult();
 | `AUTH_NULL` | No login attempted yet |
 | `AUTH_PROGRESS` | Login in progress — keep polling |
 | `AUTH_SUCCESS` | Login succeeded |
-| `AUTH_ERROR_ACC` | Account not found or wrong password |
+| `AUTH_ERROR_ACC` | Account not found |
+| `AUTH_ERROR_PWD` | Password mismatch |
 | `AUTH_ERROR_NET` | Network error |
 | `DEL_PROGRESS` | Character deletion in progress |
 | `DEL_SUCCESS` | Character deletion succeeded |
+| `DEL_ERROR_NET` | Network error during deletion |
+| `DEL_ERROR_IVL` | Character invalid or already deleted |
+| `DEL_ERROR_MNC` | Deletion blocked — 7-day cooldown or maintenance |
 
 ---
 
 ### getSignResult
 
-Returns the sign-server-specific result of the last `loginCog` call.
+Returns the sign-server-specific result of the last `loginCog` call. Used to show a detailed error message when `getLastAuthResult()` returns `AUTH_ERROR_ACC` or `AUTH_ERROR_PWD`.
 
 ```js
 var result = window.external.getSignResult();
@@ -476,7 +707,28 @@ var result = window.external.getSignResult();
 | ----- | ------- |
 | `SIGN_UNKNOWN` | No attempt yet |
 | `SIGN_SUCCESS` | Sign server accepted the credentials |
-| `SIGN_EPASS` | Password mismatch |
+| `SIGN_EFAILED` | Could not connect to authentication server |
+| `SIGN_EILLEGAL` | Authentication cancelled due to wrong input |
+| `SIGN_EALERT` | Authentication server processing error |
+| `SIGN_EALERT_COOP` | COG account not linked, or cannot log in to the selected server |
+| `SIGN_EABORT` | Authentication server internal process crash |
+| `SIGN_ERESPONSE` | Abnormal authentication response |
+| `SIGN_EDATABASE` | Database access failure |
+| `SIGN_EPASS` | Wrong ID or password |
+| `SIGN_ESUSPEND` | Account temporarily suspended |
+| `SIGN_EELIMINATE` | Account permanently suspended |
+| `SIGN_ECLOSE` | Service closed |
+| `SIGN_ECLOSE_EX` | Too much login traffic — wait and retry |
+| `SIGN_ENOTREADY` | Server not ready |
+| `SIGN_EALREADY` | Already logged in elsewhere |
+| `SIGN_EIPADDR` | IP address / region blocked |
+| `SIGN_ERIGHT` | Insufficient account rights |
+| `SIGN_EAPP` | Unexpected launcher error |
+| `SIGN_EOTHER` | ID authentication failed (catch-all) |
+| `SIGN_ECOGLINK` | COG account not linked to PSN (console only) |
+| `SIGN_ECOGCODE` | COG code error (console only) |
+| `SIGN_ETOKEN` | Token error (console only) |
+| `SIGN_EMAINTE` | Server maintenance (console only) |
 
 ---
 
@@ -493,7 +745,7 @@ var password = window.external.getPassword();
 
 ### getServerListXml
 
-Returns the raw server-list XML fetched from the server-information host. See [Server information](#server-information) for the XML structure.
+Returns the raw server-list XML. See [Server List XML](#server-list-xml) for the full structure.
 
 ```js
 var xml = window.external.getServerListXml();
@@ -514,6 +766,16 @@ var doc = new DOMParser().parseFromString(xml, 'text/xml');
 
 ---
 
+### getAccountRights
+
+Returns XML listing the rights attached to the account. See [Account Rights](#account-rights).
+
+```js
+var rights = window.external.getAccountRights();
+```
+
+---
+
 ### getIniLastServerIndex / setIniLastServerIndex
 
 Read and write the index of the server last selected by the user. The value is stored in the game's INI file and persists across sessions.
@@ -525,29 +787,29 @@ window.external.setIniLastServerIndex(1);
 
 ---
 
-### getAccountRights
-
-Returns a string representing the account's rights/permissions bitmask.
-
-```js
-var rights = window.external.getAccountRights();
-```
-
----
-
 ### getMhfBootMode
 
-Returns the current boot mode. Only known value is `'_MHF_NORMAL'`.
+Returns the current boot mode.
 
 ```js
 var mode = window.external.getMhfBootMode();
 ```
 
+| Value | Meaning |
+| ----- | ------- |
+| `_MHF_NORMAL` | Normal launch |
+| `_MHF_SELFUP` | Self-update mode |
+| `_MHF_DMM_SELF_UPDATE` | DMM self-update mode |
+| `_MHF_AUTOLC` | Auto-launch: skip login UI and go directly to character select |
+| `_MHF_DMM_AUTO_LAUNCH` | DMM auto-launch |
+
+`_MHF_AUTOLC` and `_MHF_DMM_AUTO_LAUNCH` trigger automatic `loginCog` / `loginDmm` if credentials are cached.
+
 ---
 
 ### getMhfMutexNumber
 
-Returns the process mutex number. Used to detect if another game instance is already running.
+Returns the process mutex number. Used to namespace cookie keys (`cogid{mutex}`, `pw{mutex}`) so multiple game instances do not share credentials.
 
 ```js
 var mutex = window.external.getMhfMutexNumber();
@@ -557,23 +819,26 @@ var mutex = window.external.getMhfMutexNumber();
 
 ### getLauncherReturnCode
 
-Returns `'NORMAL'` under ordinary operation.
+Returns the launcher exit code.
 
-```js
-var code = window.external.getLauncherReturnCode();
-```
+| Value | Meaning |
+| ----- | ------- |
+| `'NULL'` | No code set |
+| `'NORMAL'` | Normal exit |
+| `'SELFUP'` | Self-update completed |
+| `'ERR'` | Error exit |
 
 ---
 
 ### isEnableSessionId
 
-Returns whether session-ID based authentication is enabled. Return type is unknown.
+Returns `true` if the session is valid. Returns `false` during server maintenance. Called after the update step completes — if `false`, a maintenance dialog is shown instead of the character selector.
 
 ---
 
 ### startUpdate
 
-Checks for available updates and starts the download if one is found. Returns `true` if an update was started. Track progress with [`getUpdateStatus`](#getUpdateStatus) and [`getUpdatePercentageTotal / getUpdatePercentageFile`](#getUpdatePercentageTotal--getUpdatePercentageFile).
+Checks for available updates and starts the download if one is found. Returns `false` if the `updateDisabled` flag is set (skip update and go directly to character selector). Track progress with [`getUpdateStatus`](#getUpdateStatus) and [`getUpdatePercentageTotal / getUpdatePercentageFile`](#getUpdatePercentageTotal--getUpdatePercentageFile).
 
 ```js
 var hasUpdate = window.external.startUpdate();
@@ -590,12 +855,13 @@ Returns the current update state.
 | `'0'` | No update in progress |
 | `'UM_UPDATE_START'` | Update downloading |
 | `'UM_UPDATE_OK'` | Update complete |
+| `'UM_UPDATE_NG'` | Update failed |
 
 ---
 
 ### getUpdatePercentageTotal / getUpdatePercentageFile
 
-Return the overall update progress and the current-file progress, both as integers 0–100.
+Return the overall update progress and the current-file progress, both as integers 0–100. Polled every ~50 ms to animate the progress bars.
 
 ```js
 var total = window.external.getUpdatePercentageTotal();
@@ -606,4 +872,4 @@ var file  = window.external.getUpdatePercentageFile();
 
 ### extractLog
 
-Extracts the game log. Return type is unknown.
+Extracts internal log messages from the game process. Polled every ~100 ms and displayed in the launcher's debug log panel.
