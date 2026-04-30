@@ -67,13 +67,38 @@ Headers:
 ## Authentication Flow
 
 1. The launcher collects username and password from the user.
-2. It calls [`loginCog(username, password, password)`](#loginCog) — or `loginHangame`/`loginDmm` for those providers.
+2. It calls [`loginCog(username, password, anyString)`](#loginCog) — or `loginHangame`/`loginDmm` for those providers.
 3. The game executable communicates with the sign server over the MHF binary protocol.
-4. The launcher polls [`getLastAuthResult()`](#getLastAuthResult) and [`getSignResult()`](#getSignResult) until the result is no longer `AUTH_PROGRESS`.
+4. The launcher polls [`getLastAuthResult()`](#getLastAuthResult) every ~10 ms until the result is no longer `AUTH_PROGRESS`.
 5. On success, [`getCharacterInfo()`](#getCharacterInfo) becomes available and returns the character list XML.
-6. The launcher calls [`selectCharacter(charUid, charUid)`](#selectCharacter) and then [`exitLauncher()`](#exitLauncher) to start the game.
+6. The launcher calls [`selectCharacter(charUid, charUid)`](#selectCharacter), waits ~3 seconds, then calls [`exitLauncher()`](#exitLauncher) to start the game.
 
-To create a new character, the launcher appends `+` to the username and calls `loginCog` again — the server interprets this as a new-character request and returns an uninitialised character slot.
+### Auto-login
+
+The launcher can persist credentials in `localStorage` and automatically call `loginCog` on the next launch. The last selected character UID is also stored, allowing fully automatic login + character selection. Because `localStorage` is backed by the IE cache, clearing the IE cache removes saved credentials and the auto-login state.
+
+### New character
+
+To request a new character slot, the launcher appends `+` to the username and calls `loginCog` again:
+
+```js
+window.external.loginCog(username + '+', password, password);
+```
+
+The sign server creates an uninitialised character row and returns it in the next [`getCharacterInfo()`](#getCharacterInfo) response.
+
+### Character deletion
+
+Deletion is also asynchronous. The launcher calls [`deleteCharacter(uid)`](#deleteCharacter) then polls `getLastAuthResult()` for `DEL_PROGRESS` → `DEL_SUCCESS`, after which it re-authenticates to refresh the character list.
+
+### Keyboard shortcuts
+
+| Key | Action |
+| --- | ------ |
+| `Enter` | Submit login form / launch game |
+| `,` | Select previous character |
+| `.` | Select next character |
+| `~` | Open debug eval console |
 
 ---
 
@@ -81,9 +106,11 @@ To create a new character, the launcher appends `+` to the username and calls `l
 
 [`getCharacterInfo()`](#getCharacterInfo) returns an XML document describing all characters for the authenticated account.
 
+The document uses **single-quoted attributes** and **Shift-JIS encoding**. Before parsing with `DOMParser`, replace `'` with `"` and `&apos;` with `'`.
+
 ```xml
 <?xml version='1.0' encoding='shift_jis'?>
-<CharacterInfo defaultUid='LAST_PLAYED_UID'>
+<CharacterInfo defaultUid='LAST_PLAYED_CHAR_ID'>
   <Character
     uid='CHAR_ID'
     name='CHARACTER_NAME'
@@ -101,27 +128,28 @@ To create a new character, the launcher appends `+` to the username and calls `l
 
 | Attribute | Type | Description |
 | --------- | ---- | ----------- |
-| `uid` | string (hex) | Unique character ID used in [`selectCharacter`](#selectCharacter) |
+| `defaultUid` (on `CharacterInfo`) | string | UID of the last character the account played. Used to restore the previous selection. |
+| `uid` | string (hex) | Unique character ID, passed to [`selectCharacter`](#selectCharacter) and [`deleteCharacter`](#deleteCharacter). |
 | `name` | string | Character name in Shift-JIS. For uninitialised characters see [below](#uninitialised-characters). |
 | `weapon` | string | Weapon name in Japanese. See [Weapons](#weapons). |
-| `HR` | int | Raw HRP value (0–999). See [HR System](#hr-system). |
-| `GR` | int | G-rank value. `0` means the character has not entered G-rank. |
-| `lastLogin` | int | Unix timestamp of the last time this character was used. |
+| `HR` | int (0–999) | Raw HRP value. See [HR System](#hr-system). Capped at 999 for display. |
+| `GR` | int (0–999) | G-rank value. `0` means the character has not entered G-rank. Capped at 999 for display. |
+| `lastLogin` | int | Unix timestamp (seconds) of the last time this character was used. |
 | `sex` | `M`\|`F` | Character gender. |
 
-Characters are ordered by `lastLogin` descending — the most recently played character is first.
+Characters are delivered in the order the sign server returns them. The sign server queries by `last_login DESC`, so the most recently played character is first.
 
 ### Uninitialised Characters
 
-A freshly created character that has never been played has `is_new_character = true` in the sign server response. The game executable replaces its name in the XML with a placeholder of `?` characters (typically `?????`). Its weapon attribute also appears as `?????`.
+A freshly created character that has never been played has `is_new_character = true` set in the sign server response. The game executable replaces the name in the XML with a placeholder consisting entirely of `?` characters (observed: `?????`). The weapon attribute also appears as `?????`.
 
-These slots must be filtered out before displaying the character list; they are not selectable — the player must enter the game first to complete character creation.
+These slots must be filtered out before displaying the character list — they are not selectable. The player must enter the game once to complete character creation and initialise their save file.
 
-Detection: name consists entirely of `?` characters **and** weapon is unrecognised.
+Detection: name consists entirely of `?` characters (any length) **and** weapon is unrecognised.
 
 ### HR System
 
-The `HR` attribute carries the raw **HRP** (Hunter Rank Points), an integer 0–999.
+The `HR` attribute is the raw **HRP** (Hunter Rank Points) value stored on the sign server, an integer 0–999. It is **not** a display rank — the launcher is responsible for converting it using the threshold table below if it wants to show a rank label.
 
 | HRP range | Displayed rank |
 | --------- | -------------- |
@@ -133,32 +161,32 @@ The `HR` attribute carries the raw **HRP** (Hunter Rank Points), an integer 0–
 | 299 – 997 | HR6 |
 | ≥ 998 | HR7 |
 
-HRP = 999 is the sentinel value that marks a character as having reached the G-rank system. When this value is present, `GR` carries the G-rank level and should be displayed instead of HR.
+HRP = 999 is the sentinel value that marks a character as having transitioned to the G-rank system. When this value is present, `GR` carries the G-rank level and should be shown instead of HR.
 
-**Entrance hall routing:** After sign-in the game executable routes the player to an entrance hall based on HRP. Players with low HRP land in a beginner hall and cannot see senior-tier channels. If a server wants all players to share a single hall regardless of rank, it must send HRP = 999 for every character — this causes every character to appear as HR7 in the launcher display.
+**Entrance hall routing:** After sign-in the game executable routes the player to an entrance hall based on HRP. Players with low HRP land in a beginner hall and cannot see senior-tier channels. If a server wants all players to share a single hall regardless of rank, it sends HRP = 999 for every character. This does not affect the `GR` value.
 
 ### Weapons
 
 The `weapon` attribute is a Japanese string. Known values:
 
-| Japanese | English |
-| -------- | ------- |
-| 片手剣 | Sword & Shield |
-| 双剣 | Dual Swords |
-| 大剣 | Greatsword |
-| 太刀 | Longsword |
-| ハンマー | Hammer |
-| 狩猟笛 | Hunting Horn |
-| ランス | Lance |
-| ガンランス | Gunlance |
-| 穿龍棍 | Tonfa |
-| スラッシュアックスＦ | Switch Axe |
-| マグネットスパイク | Magnet Spike |
-| ヘビィボウガン | Heavy Bowgun |
-| ライトボウガン | Light Bowgun |
-| 弓 | Bow |
+| Japanese | English | Icon filename |
+| -------- | ------- | ------------- |
+| 片手剣 | Sword & Shield | `ss` |
+| 双剣 | Dual Swords | `db` |
+| 大剣 | Greatsword | `gs` |
+| 太刀 | Longsword | `ls` |
+| ハンマー | Hammer | `hm` |
+| 狩猟笛 | Hunting Horn | `hh` |
+| ランス | Lance | `ln` |
+| ガンランス | Gunlance | `gl` |
+| 穿龍棍 | Tonfa | `tf` |
+| スラッシュアックスＦ | Switch Axe F | `sa` |
+| マグネットスパイク | Magnet Spike | `ms` |
+| ヘビィボウガン | Heavy Bowgun | `hbg` |
+| ライトボウガン | Light Bowgun | `lbg` |
+| 弓 | Bow | `bow` |
 
-Any unrecognised value (including `?????`) means the weapon is unknown or unset.
+Any unrecognised value (including `?????`) means the weapon is unknown or unset. Icon: `uk`.
 
 ---
 
@@ -187,10 +215,11 @@ try {
 | [`restartMhf`](#restartMhf) | `void` | Restart the launcher |
 | [`exitLauncher`](#exitLauncher) | `void` | Close the launcher and start the game |
 | [`selectCharacter`](#selectCharacter) | `void` | Select which character to play |
+| [`deleteCharacter`](#deleteCharacter) | `void` | Delete a character by UID (asynchronous) |
 | [`loginCog`](#loginCog) | `void` | Authenticate against the sign server (JP/TW) |
 | [`loginHangame`](#loginHangame) | `void` | Authenticate via Hangame |
 | [`loginDmm`](#loginDmm) | `void` | Authenticate via DMM |
-| [`getLastAuthResult`](#getLastAuthResult) | `LastAuthResult` | Auth result of the last `loginCog` call |
+| [`getLastAuthResult`](#getLastAuthResult) | `LastAuthResult` | Result of the last auth or delete operation |
 | [`getSignResult`](#getSignResult) | `SignResult` | Sign-server result of the last `loginCog` call |
 | [`getUserId`](#getUserId) | `string` | Username used for the last login |
 | [`getPassword`](#getPassword) | `string` | Password used for the last login |
@@ -203,11 +232,10 @@ try {
 | [`setIniLastServerIndex`](#setIniLastServerIndex) | `void` | Persist the user's server selection |
 | [`getLauncherReturnCode`](#getLauncherReturnCode) | `'NORMAL'` | Return code from the launcher process |
 | [`isEnableSessionId`](#isEnableSessionId) | `unknown` | Whether session ID auth is enabled |
-| [`startUpdate`](#startUpdate) | `boolean` | Start the file update process; returns `true` if update is available |
+| [`startUpdate`](#startUpdate) | `boolean` | Start the file update process |
 | [`getUpdateStatus`](#getUpdateStatus) | `UpdateStatus` | Current update state |
 | [`getUpdatePercentageTotal`](#getUpdatePercentageTotal) | `number` | Overall update progress (0–100) |
 | [`getUpdatePercentageFile`](#getUpdatePercentageFile) | `number` | Per-file update progress (0–100) |
-| [`deleteCharacter`](#deleteCharacter) | `void` | Delete a character by UID |
 | [`extractLog`](#extractLog) | `unknown` | Extract the game log |
 | `debugGetIniUserId` | `string` | Debug: read userId from INI |
 | `debugGetIniPassword` | `string` | Debug: read password from INI |
@@ -260,6 +288,8 @@ export enum LastAuthResult {
   InLoading = 'AUTH_PROGRESS',
   AuthErrorAcc = 'AUTH_ERROR_ACC',
   AuthErrorNet = 'AUTH_ERROR_NET',
+  DeleteInProgress = 'DEL_PROGRESS',
+  DeleteSuccess = 'DEL_SUCCESS',
 }
 
 export enum SignResult {
@@ -279,7 +309,7 @@ export enum UpdateStatus {
 
 ### playSound
 
-Plays a built-in launcher audio clip.
+Plays a built-in launcher audio clip. Some sounds can also be loaded from local audio files when the built-in is unavailable.
 
 ```js
 window.external.playSound('IDR_NIKU');
@@ -296,10 +326,11 @@ window.external.playSound('IDR_NIKU');
 
 ### beginDrag
 
-Enables window dragging while `active` is `true`. Call with `false` to disable.
+Enables window dragging while `active` is `true`. Called on `mousedown` and `mouseup` events on draggable regions, and with `false` on `mouseover` events over interactive elements to prevent accidental dragging.
 
 ```js
-window.external.beginDrag(true);
+window.external.beginDrag(true);   // start drag
+window.external.beginDrag(false);  // stop drag
 ```
 
 ---
@@ -326,7 +357,7 @@ window.external.closeWindow();
 
 ### openBrowser
 
-Opens a URL in the system default browser.
+Opens a URL in the system default browser. Typically guarded by a confirmation modal before calling.
 
 ```js
 window.external.openBrowser('https://example.com');
@@ -346,7 +377,7 @@ window.external.openMhlConfig();
 
 ### restartMhf
 
-Restarts the launcher process (used to switch accounts).
+Restarts the launcher process. Used to log out and switch accounts.
 
 ```js
 window.external.restartMhf();
@@ -356,17 +387,20 @@ window.external.restartMhf();
 
 ### exitLauncher
 
-Closes the launcher and hands control to the game. Must be called after [`selectCharacter`](#selectCharacter).
+Closes the launcher and hands control to the game. Must be called after [`selectCharacter`](#selectCharacter). A ~3 second delay between `selectCharacter` and `exitLauncher` is recommended to allow the game to process the selection.
 
 ```js
-window.external.exitLauncher();
+window.external.selectCharacter(uid, uid);
+setTimeout(function () {
+  window.external.exitLauncher();
+}, 3000);
 ```
 
 ---
 
 ### selectCharacter
 
-Selects the character to play. Both parameters are the same character UID. Must be called before [`exitLauncher`](#exitLauncher).
+Marks a character as the one to play. Both arguments receive the same character UID. Must be called before [`exitLauncher`](#exitLauncher).
 
 ```js
 window.external.selectCharacter(charUid, charUid);
@@ -374,9 +408,29 @@ window.external.selectCharacter(charUid, charUid);
 
 ---
 
+### deleteCharacter
+
+Initiates asynchronous deletion of a character. After calling this, poll [`getLastAuthResult()`](#getLastAuthResult) for `DEL_PROGRESS` → `DEL_SUCCESS`, then re-authenticate to refresh the character list.
+
+```js
+window.external.deleteCharacter(charUid);
+
+function checkDelete() {
+  var result = window.external.getLastAuthResult();
+  if (result == 'DEL_PROGRESS') {
+    setTimeout(checkDelete, 10);
+  } else if (result == 'DEL_SUCCESS') {
+    // re-authenticate and refresh
+  }
+}
+checkDelete();
+```
+
+---
+
 ### loginCog
 
-Initiates authentication against the sign server. The call returns immediately; poll [`getLastAuthResult()`](#getLastAuthResult) to track progress.
+Initiates authentication against the sign server. Returns immediately; poll [`getLastAuthResult()`](#getLastAuthResult) every ~10 ms to track progress. The third argument (confirm password) is not validated by the server and can be any string.
 
 ```js
 window.external.loginCog(username, password, password);
@@ -388,16 +442,14 @@ To request a new character slot, append `+` to the username:
 window.external.loginCog(username + '+', password, password);
 ```
 
-The sign server creates an uninitialised character row and returns it in the next [`getCharacterInfo()`](#getCharacterInfo) response.
-
 ---
 
 ### getLastAuthResult
 
-Returns the result of the last `loginCog` call.
+Returns the result of the last `loginCog` or [`deleteCharacter`](#deleteCharacter) call. Shared between auth and deletion flows.
 
 ```js
-const result = window.external.getLastAuthResult();
+var result = window.external.getLastAuthResult();
 ```
 
 | Value | Meaning |
@@ -407,6 +459,8 @@ const result = window.external.getLastAuthResult();
 | `AUTH_SUCCESS` | Login succeeded |
 | `AUTH_ERROR_ACC` | Account not found or wrong password |
 | `AUTH_ERROR_NET` | Network error |
+| `DEL_PROGRESS` | Character deletion in progress |
+| `DEL_SUCCESS` | Character deletion succeeded |
 
 ---
 
@@ -415,7 +469,7 @@ const result = window.external.getLastAuthResult();
 Returns the sign-server-specific result of the last `loginCog` call.
 
 ```js
-const result = window.external.getSignResult();
+var result = window.external.getSignResult();
 ```
 
 | Value | Meaning |
@@ -428,31 +482,34 @@ const result = window.external.getSignResult();
 
 ### getUserId / getPassword
 
-Returns the username / password used in the last `loginCog` call. Useful for re-authenticating (e.g., calling a secondary API) without asking the user again.
+Returns the username / password used in the last `loginCog` call. Useful for re-authenticating without prompting the user again.
 
 ```js
-const username = window.external.getUserId();
-const password = window.external.getPassword();
+var username = window.external.getUserId();
+var password = window.external.getPassword();
 ```
 
 ---
 
 ### getServerListXml
 
-Returns the raw server-list XML fetched from the server-information host. See [Character Info XML](#character-info-xml) for structure.
+Returns the raw server-list XML fetched from the server-information host. See [Server information](#server-information) for the XML structure.
 
 ```js
-const xml = window.external.getServerListXml();
+var xml = window.external.getServerListXml();
 ```
 
 ---
 
 ### getCharacterInfo
 
-Returns an XML document with all characters for the authenticated account. Only available after a successful login. See [Character Info XML](#character-info-xml) for the full format.
+Returns the character list XML for the authenticated account. Only available after a successful login. See [Character Info XML](#character-info-xml) for the full format, including the single-quote preprocessing required before parsing.
 
 ```js
-const xml = window.external.getCharacterInfo();
+var xml = window.external.getCharacterInfo();
+// Normalise quotes before parsing
+xml = xml.split("'").join('"').split('&apos;').join("'");
+var doc = new DOMParser().parseFromString(xml, 'text/xml');
 ```
 
 ---
@@ -462,7 +519,7 @@ const xml = window.external.getCharacterInfo();
 Read and write the index of the server last selected by the user. The value is stored in the game's INI file and persists across sessions.
 
 ```js
-const idx = window.external.getIniLastServerIndex();
+var idx = window.external.getIniLastServerIndex();
 window.external.setIniLastServerIndex(1);
 ```
 
@@ -473,7 +530,7 @@ window.external.setIniLastServerIndex(1);
 Returns a string representing the account's rights/permissions bitmask.
 
 ```js
-const rights = window.external.getAccountRights();
+var rights = window.external.getAccountRights();
 ```
 
 ---
@@ -483,17 +540,17 @@ const rights = window.external.getAccountRights();
 Returns the current boot mode. Only known value is `'_MHF_NORMAL'`.
 
 ```js
-const mode = window.external.getMhfBootMode();
+var mode = window.external.getMhfBootMode();
 ```
 
 ---
 
 ### getMhfMutexNumber
 
-Returns the process mutex number. Used to detect if another instance is already running.
+Returns the process mutex number. Used to detect if another game instance is already running.
 
 ```js
-const mutex = window.external.getMhfMutexNumber();
+var mutex = window.external.getMhfMutexNumber();
 ```
 
 ---
@@ -503,7 +560,7 @@ const mutex = window.external.getMhfMutexNumber();
 Returns `'NORMAL'` under ordinary operation.
 
 ```js
-const code = window.external.getLauncherReturnCode();
+var code = window.external.getLauncherReturnCode();
 ```
 
 ---
@@ -516,10 +573,10 @@ Returns whether session-ID based authentication is enabled. Return type is unkno
 
 ### startUpdate
 
-Checks for and starts a file update. Returns `true` if an update is available and was started, `false` otherwise. Track progress with [`getUpdateStatus`](#getUpdateStatus) and [`getUpdatePercentageTotal`](#getUpdatePercentagetotal--getUpdatePercentagefile).
+Checks for available updates and starts the download if one is found. Returns `true` if an update was started. Track progress with [`getUpdateStatus`](#getUpdateStatus) and [`getUpdatePercentageTotal / getUpdatePercentageFile`](#getUpdatePercentageTotal--getUpdatePercentageFile).
 
 ```js
-const hasUpdate = window.external.startUpdate();
+var hasUpdate = window.external.startUpdate();
 ```
 
 ---
@@ -538,21 +595,11 @@ Returns the current update state.
 
 ### getUpdatePercentageTotal / getUpdatePercentageFile
 
-Return the overall update progress and the current file's progress, both as integers 0–100.
+Return the overall update progress and the current-file progress, both as integers 0–100.
 
 ```js
-const total = window.external.getUpdatePercentageTotal();
-const file  = window.external.getUpdatePercentageFile();
-```
-
----
-
-### deleteCharacter
-
-Deletes a character by UID.
-
-```js
-window.external.deleteCharacter(charUid);
+var total = window.external.getUpdatePercentageTotal();
+var file  = window.external.getUpdatePercentageFile();
 ```
 
 ---
