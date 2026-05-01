@@ -927,9 +927,7 @@ Returns `true` if the session is valid. Returns `false` during server maintenanc
 
 ### startUpdate
 
-Checks for available updates and starts the download if one is found. Returns `false` if the `updateDisabled` flag is set in the launcher JS, in which case the update step is skipped entirely and the launcher proceeds directly to the character selector. Track progress with [`getUpdateStatus`](#getUpdateStatus) and [`getUpdatePercentageTotal / getUpdatePercentageFile`](#getUpdatePercentageTotal--getUpdatePercentageFile).
-
-The `updateDisabled` flag is a top-level variable in the launcher JavaScript (`var updateDisabled = true`). Private server builds typically keep it `true` to skip patching.
+Checks for available updates and starts the download if one is found. Returns `false` if the `updateDisabled` flag is set (skip update and go directly to character selector). Track progress with [`getUpdateStatus`](#getUpdateStatus) and [`getUpdatePercentageTotal / getUpdatePercentageFile`](#getUpdatePercentageTotal--getUpdatePercentageFile).
 
 ```js
 var hasUpdate = window.external.startUpdate();
