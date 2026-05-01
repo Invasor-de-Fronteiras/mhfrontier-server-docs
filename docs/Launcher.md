@@ -76,6 +76,8 @@ Headers:
 | Method | Route | Description |
 | ------ | ----- | ----------- |
 | GET | `/launcher/?ver=2.016` | Returns the launcher HTML |
+| GET | `/bnr/launcher.html` | Banner rotation HTML (see [Launcher HTML File Formats](#launcher-html-file-formats)) |
+| GET | `/launcher_list.html` | News list HTML (see [Launcher HTML File Formats](#launcher-html-file-formats)) |
 | GET | `/version` | Returns the current patch version as a plain string |
 | POST | `/auth/launcher/login` | COG short-lived auth endpoint (see [JP Auth Endpoint](#jp-auth-endpoint)) |
 
@@ -113,6 +115,41 @@ The `skey` field must carry the raw password. The game executable reads this val
 
 ---
 
+## Launcher HTML File Formats
+
+Both `bnr/launcher.html` and `launcher_list.html` use the same delimiter convention. The launcher fetches them with `$.ajax({ cache: false })` and splits the response body on the string `<!--###content###-->`. The result must have exactly **3 parts** — anything else causes the launcher to fall back to opening the URL in the system browser.
+
+```
+[preamble]<!--###content###-->[content items]<!--###content###-->[postamble]
+```
+
+Only the middle section (index 1) is used. Everything outside the delimiters is ignored.
+
+### bnr/launcher.html — Banner rotation
+
+The middle section must be a `<ul>` containing `<li>` items, one per banner slide. Maximum 5 banners are displayed.
+
+```html
+<!--###content###-->
+<li><a href="/sp/news/123.html"><img src="images/bnr/example.jpg" alt="..." /></a></li>
+<li><a href="http://external.example.com/page"><img src="images/bnr/example2.jpg" alt="..." /></a></li>
+<!--###content###-->
+```
+
+The launcher rewrites `src=` paths to absolute URLs based on the page's host. Internal paths (starting with `/`) are kept as-is; relative paths are prefixed with the banner CDN base. Banners rotate automatically every **5000 ms**. If an image fails to load, the launcher retries with a cache-busting query string (`?c={n}`) every 5000 ms.
+
+Items with CSS class filter suffixes (`cogHide`, `cogOnly`, `nhnOnly`, `dmmOnly`, etc.) are hidden or shown depending on the authentication mode.
+
+### launcher_list.html — News list
+
+The middle section is raw HTML inserted directly into the news list pane. Links pointing to `/sp/news/` paths are intercepted by the launcher and loaded inline (see below); all other links open in the system browser.
+
+### /sp/news/{id} — News article detail
+
+Individual article pages follow the same three-part delimiter format. The middle section must contain the article body HTML. The launcher strips `<script>`, `<iframe>`, `<video>`, `<audio>`, `<source>`, and `<input>` tags from the content before rendering.
+
+---
+
 ## Authentication Providers
 
 The launcher determines which authentication provider to use from the page's hostname:
@@ -132,14 +169,18 @@ The mode is detected once at page load. COG is the default for the official Japa
 ### PC (COG)
 
 1. The launcher collects username and password from the user.
-2. A hidden iframe loads `./bnr/launcher.html?q={random}` and sends the credentials to the COG short-lived auth service via `postMessage`.
+2. A hidden iframe is created pointing to `www.capcom-onlinegames.jp/auth/bnr/launcher.html?q={counter}`. That page sends `{"action":"standby"}` to the parent via `postMessage` when ready. The launcher responds with the credentials payload:
+   ```json
+   {"id": "<username>", "pw": "<password>", "svid": "<server_id>", "lifetime": "60", "action": "login"}
+   ```
+   The auth page then POSTs `pw` to `POST /auth/launcher/login` and relays the server's response back to the launcher via `postMessage`.
 3. The auth service responds with a result code. `000` = proceed; anything else = show error.
 4. On `000`, the launcher calls [`loginCog(username, password, password)`](#loginCog).
 5. The game executable communicates with the sign server over the MHF binary protocol.
-6. The launcher polls [`getLastAuthResult()`](#getLastAuthResult) every ~10 ms until the result is no longer `AUTH_PROGRESS`.
+6. The launcher polls [`getLastAuthResult()`](#getLastAuthResult) every **1000 ms** until the result is no longer `AUTH_PROGRESS`. A **60-second backbone timeout** fires if no response is received, showing an error dialog.
 7. On success, the launcher calls [`getAccountRights()`](#getAccountRights). If the account has no `trial` right, a registration dialog is shown. If HR ≥ 100 and no `basic` right (Hunter Life Course), a purchase dialog is shown.
 8. [`getCharacterInfo()`](#getCharacterInfo) becomes available and returns the character list XML.
-9. The launcher calls [`selectCharacter(charUid, charUid)`](#selectCharacter), waits ~3 seconds, then calls [`exitLauncher()`](#exitLauncher) to start the game.
+9. The launcher calls [`selectCharacter(charUid, charUid)`](#selectCharacter), then calls [`exitLauncher()`](#exitLauncher) after **500 ms**.
 
 ### PC (Hangame / DMM)
 
@@ -219,7 +260,7 @@ Attempting to delete the last character on an account triggers a 7-day cooldown 
 | `ip` | string | Server IP or hostname. **Empty string `""`** marks the server as blocked — it cannot be selected. |
 | `port` | int | Sign server port (default `53312`). |
 | `cog` | string | COG environment. `pre` = pre-release/staging, `c` = production. |
-| `svid` | string | Server ID used for backend routing. Defaults to `"1000"` if absent. Server ID `"1018"` triggers a COOP restriction alert. |
+| `svid` | string | Server ID used for backend routing. Defaults to `"1000"` if absent. Server ID `"1018"` triggers a COOP restriction alert. Server names containing `④` or `XBOX` also trigger the COOP alert regardless of `svid`. |
 | `oauth_url` | string | Console-only. URL for the COG account linking page (`link.html`). |
 
 The launcher stores the last selected index via [`setIniLastServerIndex()`](#getIniLastServerIndex--setIniLastServerIndex).
@@ -262,6 +303,8 @@ The document uses **single-quoted attributes** and **Shift-JIS encoding**. Befor
 | `sex` | `M`\|`F` | Character gender. |
 
 Characters are delivered in the order the sign server returns them. The sign server queries by `last_login DESC`, so the most recently played character is **first**.
+
+The launcher enforces a maximum of **11 characters** per account. The "Add character" button is disabled when the count reaches 11.
 
 ### Uninitialised Characters
 
@@ -640,13 +683,13 @@ window.external.restartMhf();
 
 ### exitLauncher
 
-Closes the launcher and hands control to the game. Must be called after [`selectCharacter`](#selectCharacter). A ~3 second delay between `selectCharacter` and `exitLauncher` is recommended to allow the game to process the selection.
+Closes the launcher and hands control to the game. Must be called after [`selectCharacter`](#selectCharacter). The official client waits **500 ms** between `selectCharacter` and `exitLauncher`.
 
 ```js
 window.external.selectCharacter(uid, uid);
 setTimeout(function () {
   window.external.exitLauncher();
-}, 3000);
+}, 500);
 ```
 
 ---
@@ -884,7 +927,9 @@ Returns `true` if the session is valid. Returns `false` during server maintenanc
 
 ### startUpdate
 
-Checks for available updates and starts the download if one is found. Returns `false` if the `updateDisabled` flag is set (skip update and go directly to character selector). Track progress with [`getUpdateStatus`](#getUpdateStatus) and [`getUpdatePercentageTotal / getUpdatePercentageFile`](#getUpdatePercentageTotal--getUpdatePercentageFile).
+Checks for available updates and starts the download if one is found. Returns `false` if the `updateDisabled` flag is set in the launcher JS, in which case the update step is skipped entirely and the launcher proceeds directly to the character selector. Track progress with [`getUpdateStatus`](#getUpdateStatus) and [`getUpdatePercentageTotal / getUpdatePercentageFile`](#getUpdatePercentageTotal--getUpdatePercentageFile).
+
+The `updateDisabled` flag is a top-level variable in the launcher JavaScript (`var updateDisabled = true`). Private server builds typically keep it `true` to skip patching.
 
 ```js
 var hasUpdate = window.external.startUpdate();
